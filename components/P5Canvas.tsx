@@ -205,6 +205,8 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
       class Lens {
         channel: ChannelState;
         pos: any;
+        vel: any;
+        acc: any;
         targetPos: any;
         color: any;
         noiseSeed: number;
@@ -218,6 +220,8 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
             p.height / 2 + radius * p.sin(angle)
           );
           this.pos = this.targetPos.copy();
+          this.vel = p.createVector(0, 0);
+          this.acc = p.createVector(0, 0);
           this.noiseSeed = p.random(1000);
           
           const colorMapping: { [key: string]: number[] } = {
@@ -233,16 +237,50 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
           this.color = p.color(colorValues[0], colorValues[1], colorValues[2]);
         }
         
+        applyForce(force: any) {
+            this.acc.add(force);
+        }
+
+        applyBehaviors(otherLenses: Lens[]) {
+            // 1. Attraction to its anchor position (spring force)
+            let toTarget = p5.Vector.sub(this.targetPos, this.pos);
+            toTarget.mult(0.01); 
+            this.applyForce(toTarget);
+
+            // 2. Interaction with other lenses
+            for (const other of otherLenses) {
+                if (other === this) continue;
+
+                let force = p5.Vector.sub(this.pos, other.pos);
+                let distance = force.mag();
+
+                // General Repulsion to avoid overlap
+                if (distance < 120) { 
+                    force.setMag(p.map(distance, 0, 120, 0.6, 0));
+                    this.applyForce(force);
+                }
+
+                // Correlated Novelty Attraction
+                const meritThreshold = 0.35;
+                if (this.channel.merit > meritThreshold && other.channel.merit > meritThreshold) {
+                    let attractionForce = p5.Vector.sub(other.pos, this.pos);
+                    let d = attractionForce.mag();
+                    if (d > 100) { 
+                        attractionForce.setMag(p.map(d, 100, p.width, 0, 0.25));
+                        this.applyForce(attractionForce);
+                    }
+                }
+            }
+        }
+
         update(channel: ChannelState) {
           this.channel = channel;
-
-          if (this.channel.attention < 0.2) {
-            const wanderStrength = p.map(this.channel.attention, 0, 0.2, 0.5, 0);
-            const angle = p.noise(this.noiseSeed + p.frameCount * 0.005) * p.TWO_PI * 4;
-            const wanderVector = p5.Vector.fromAngle(angle, wanderStrength);
-            this.pos.add(wanderVector);
-          }
-          this.pos.lerp(this.targetPos, 0.02);
+          // Physics based movement
+          this.vel.add(this.acc);
+          this.vel.mult(0.95); // Damping
+          this.vel.limit(3); // Max speed
+          this.pos.add(this.vel);
+          this.acc.mult(0); // Reset acceleration
         }
 
         attract(particle: Particle) {
@@ -372,6 +410,11 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
           particle.update();
           particle.display(p.color(100, 5, 100), particle.baseAlpha);
         }
+        
+        // --- LENS INTERACTION PASS ---
+        lenses.forEach(lens => {
+            lens.applyBehaviors(lenses);
+        });
 
         // --- Update Lenses and have them affect particles ---
         lenses.forEach((lens, i) => {
