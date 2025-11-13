@@ -1,0 +1,7 @@
+{
+  "name": "Cybernetic Musicolour",
+  "description": "A modern web-based reinterpretation of Gordon Pask's 1953 cybernetic art system, Musicolour. It is not a passive music visualizer, but an interactive partner that gets 'bored' with repetition and seeks novelty, engaging the user in a co-creative 'conversation'.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
