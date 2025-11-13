@@ -1,6 +1,5 @@
-
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import type { ChannelState } from './types';
+import type { ChannelState, HarmonyState } from './types';
 import { 
   CHANNEL_DEFINITIONS, 
   FFT_SIZE, 
@@ -39,11 +38,53 @@ const initialChannels: ChannelState[] = CHANNEL_DEFINITIONS.map(def => ({
   isActive: false,
 }));
 
+// New analysis function for harmony using Harmonic Product Spectrum
+const analyzeHarmony = (fftData: Uint8Array, sampleRate: number, fftSize: number): { pitch: number; consonance: number } => {
+  const spectrum = Array.from(fftData).map(v => v / 255.0); // Normalize
+  const hps = new Float32Array(spectrum.length);
+  const harmonics = 5;
+
+  for (let i = 0; i < spectrum.length; i++) {
+    hps[i] = spectrum[i];
+  }
+
+  for (let h = 2; h <= harmonics; h++) {
+    for (let i = 0; i < Math.floor(spectrum.length / h); i++) {
+      hps[i] *= spectrum[i * h];
+    }
+  }
+
+  let maxVal = 0;
+  let maxIndex = 0;
+  const minFreq = 60; // Hz
+  const maxFreq = 1200; // Hz
+  const minIndex = Math.floor(minFreq / (sampleRate / fftSize));
+  const maxIndexSearch = Math.ceil(maxFreq / (sampleRate / fftSize));
+  
+  for (let i = minIndex; i < maxIndexSearch && i < hps.length; i++) {
+    if (hps[i] > maxVal) {
+      maxVal = hps[i];
+      maxIndex = i;
+    }
+  }
+
+  const pitch = maxIndex * (sampleRate / fftSize);
+  const consonance = Math.pow(maxVal, 1 / harmonics);
+
+  return { pitch, consonance };
+};
+
 
 const App: React.FC = () => {
   const [isListening, setIsListening] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [channels, setChannels] = useState<ChannelState[]>(initialChannels);
+  const [harmonyState, setHarmonyState] = useState<HarmonyState>({
+    pitch: 0,
+    consonance: 0,
+    tension: 1,
+    resolution: 0,
+  });
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -65,6 +106,20 @@ const App: React.FC = () => {
     const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
     analyserRef.current.getByteFrequencyData(dataArray);
 
+    // --- New Harmony Analysis ---
+    const newHarmony = analyzeHarmony(dataArray, SAMPLE_RATE, FFT_SIZE);
+    setHarmonyState(prev => {
+      const smoothedConsonance = prev.consonance * 0.9 + newHarmony.consonance * 0.1;
+      const resolution = Math.max(0, smoothedConsonance - prev.consonance) * 8;
+      return {
+        pitch: prev.pitch * 0.8 + newHarmony.pitch * 0.2,
+        consonance: smoothedConsonance,
+        tension: 1 - smoothedConsonance,
+        resolution: Math.min(1, resolution),
+      };
+    });
+
+    // --- Original Channel Analysis ---
     setChannels(prevChannels => {
       const updatedChannels = [...prevChannels];
       let attentionScores: number[] = [];
@@ -174,7 +229,7 @@ const App: React.FC = () => {
   return (
     <div className="fixed inset-0 w-full h-full bg-[#1a2019]">
       {isListening ? (
-         <P5Canvas channels={channels} />
+         <P5Canvas channels={channels} harmonyState={harmonyState} />
       ) : (
          <div className="w-full h-full flex flex-col items-center justify-center">
             <button
