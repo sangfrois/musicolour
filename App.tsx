@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import type { ChannelState, HarmonyState } from './types';
 import { 
@@ -74,6 +75,66 @@ const analyzeHarmony = (fftData: Uint8Array, sampleRate: number, fftSize: number
   return { pitch, consonance };
 };
 
+// --- New Interharmonic Analysis ---
+const CONSONANT_RATIOS = [3/2, 4/3, 5/4, 6/5, 5/3]; // Common ratios within an octave
+const CONSONANCE_TOLERANCE = 0.05; // 5% tolerance for a ratio to be considered consonant
+
+const analyzeInterharmonics = (fftData: Uint8Array, channels: ChannelState[], sampleRate: number, fftSize: number): number[][] => {
+  // 1. Find the strongest frequency peak in each channel
+  const peaks = channels.map(channel => {
+    const [start, end] = channel.fftIndexRange;
+    let maxVal = 0;
+    let maxIndex = start;
+    for (let i = start; i <= end; i++) {
+      if (fftData[i] > maxVal) {
+        maxVal = fftData[i];
+        maxIndex = i;
+      }
+    }
+    // Only consider the peak significant if its magnitude is above a threshold
+    if (maxVal < 20) {
+      return { freq: 0, mag: 0 };
+    }
+    const freq = maxIndex * (sampleRate / fftSize);
+    return { freq, mag: maxVal };
+  });
+
+  const consonanceMatrix: number[][] = Array(channels.length).fill(0).map(() => Array(channels.length).fill(0));
+
+  // 2. Calculate consonance score for each pair of channels
+  for (let i = 0; i < peaks.length; i++) {
+    for (let j = i + 1; j < peaks.length; j++) {
+      const peak1 = peaks[i];
+      const peak2 = peaks[j];
+
+      if (peak1.freq === 0 || peak2.freq === 0) continue;
+
+      let ratio = peak2.freq > peak1.freq ? peak2.freq / peak1.freq : peak1.freq / peak2.freq;
+      // Bring ratio into the [1, 2) octave to compare with base ratios
+      while (ratio >= 2) ratio /= 2;
+      while (ratio < 1) ratio *= 2; 
+
+      let minDistance = Infinity;
+      for (const target of CONSONANT_RATIOS) {
+        const dist = Math.abs(ratio - target);
+        if (dist < minDistance) {
+          minDistance = dist;
+        }
+      }
+      
+      // The score is based on how close the ratio is to a pure consonant one,
+      // and weighted by the volume (magnitude) of the peaks.
+      const rawScore = Math.max(0, 1 - minDistance / CONSONANCE_TOLERANCE);
+      const magnitudeWeight = Math.min(peak1.mag / 128, peak2.mag / 128); // Normalize magnitude
+      const score = rawScore * magnitudeWeight;
+
+      consonanceMatrix[i][j] = score;
+      consonanceMatrix[j][i] = score; // Matrix is symmetric
+    }
+  }
+  return consonanceMatrix;
+};
+
 
 const App: React.FC = () => {
   const [isListening, setIsListening] = useState<boolean>(false);
@@ -84,6 +145,7 @@ const App: React.FC = () => {
     consonance: 0,
     tension: 1,
     resolution: 0,
+    interLensConsonance: Array(CHANNEL_DEFINITIONS.length).fill(0).map(() => Array(CHANNEL_DEFINITIONS.length).fill(0)),
   });
 
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -106,8 +168,9 @@ const App: React.FC = () => {
     const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
     analyserRef.current.getByteFrequencyData(dataArray);
 
-    // --- New Harmony Analysis ---
+    // --- Harmony Analysis ---
     const newHarmony = analyzeHarmony(dataArray, SAMPLE_RATE, FFT_SIZE);
+    const newInterLensConsonance = analyzeInterharmonics(dataArray, channels, SAMPLE_RATE, FFT_SIZE);
     setHarmonyState(prev => {
       const smoothedConsonance = prev.consonance * 0.9 + newHarmony.consonance * 0.1;
       const resolution = Math.max(0, smoothedConsonance - prev.consonance) * 8;
@@ -116,10 +179,11 @@ const App: React.FC = () => {
         consonance: smoothedConsonance,
         tension: 1 - smoothedConsonance,
         resolution: Math.min(1, resolution),
+        interLensConsonance: newInterLensConsonance,
       };
     });
 
-    // --- Original Channel Analysis ---
+    // --- Channel Analysis ---
     setChannels(prevChannels => {
       const updatedChannels = [...prevChannels];
       let attentionScores: number[] = [];
@@ -173,7 +237,7 @@ const App: React.FC = () => {
     });
 
     animationFrameRef.current = requestAnimationFrame(animationLoop);
-  }, []);
+  }, [channels]); // Added channels dependency for analyzeInterharmonics
 
 
   const startListening = async () => {

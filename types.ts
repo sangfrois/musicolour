@@ -29,4 +29,5 @@ export interface HarmonyState {
   consonance: number; // 0-1, clarity/periodicity
   tension: number; // 0-1, 1 - consonance
   resolution: number; // 0-1, strength of recent consonance increase
+  interLensConsonance: number[][];
 }

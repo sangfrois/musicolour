@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect } from 'react';
 import { ChannelState, HarmonyState } from '../types';
 
@@ -27,6 +28,7 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
       let harmonicCore: HarmonicCore;
       const lenses: Lens[] = [];
       const PARTICLE_COUNT = 1500;
+      let smoothedPalette: any = null;
 
       class Particle {
         pos: any;
@@ -139,19 +141,17 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
               this.noiseSeed = p.random(1000);
           }
 
-          update() {
+          update(palette: any) {
               this.pos.set(p.width / 2, p.height / 2);
               const { harmonyState } = propsRef.current;
               
-              // Trigger resolution pulse for high resolution values
-              if (harmonyState.resolution > 0.5 && p.frameCount % 2 === 0) { // Throttle slightly
-                  this.pulse(harmonyState.resolution);
+              if (harmonyState.resolution > 0.5 && p.frameCount % 2 === 0) { 
+                  this.pulse(harmonyState.resolution, palette.accent);
               }
           }
           
-          pulse(strength: number) {
+          pulse(strength: number, pulseColor: any) {
               const particleCount = p.floor(p.map(strength, 0.5, 1, 20, 100));
-              const pulseColor = p.color(50, 100, 100); // Bright gold
               for (let i = 0; i < particleCount; i++) {
                   const angle = p.random(p.TWO_PI);
                   const speed = p.random(3, 8) * (1 + strength);
@@ -160,17 +160,15 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
               }
           }
 
-          display() {
+          display(palette: any) {
               const { harmonyState, channels } = propsRef.current;
               const tension = harmonyState?.tension ?? 0.5;
 
-              // Calculate overall energy for size from active channels
               const totalSignal = channels.reduce((sum, ch) => sum + ch.currentSignal, 0);
               const avgSignal = channels.length > 0 ? totalSignal / channels.length : 0;
               const baseSize = 50 + avgSignal * 250;
 
-              // Interpolate color based on tension
-              const lowTensionColor = p.color(45, 80, 100); // Gold
+              const lowTensionColor = palette.primary; 
               const highTensionColor = p.color(0, 90, 90); // Red
               const coreColor = p.lerpColor(lowTensionColor, highTensionColor, tension);
 
@@ -178,10 +176,8 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
               p.translate(this.pos.x, this.pos.y);
               p.noStroke();
 
-              // Agitated shape for high tension
               const instability = tension * 20;
               
-              // Render multiple layers for a glow effect
               for (let i = 5; i > 0; i--) {
                   const size = baseSize + i * 20;
                   const alpha = p.map(i, 5, 1, 10, 50);
@@ -210,6 +206,7 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
         targetPos: any;
         color: any;
         noiseSeed: number;
+        hueOffset: number;
 
         constructor(channel: ChannelState, index: number, total: number) {
           this.channel = channel;
@@ -223,18 +220,8 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
           this.vel = p.createVector(0, 0);
           this.acc = p.createVector(0, 0);
           this.noiseSeed = p.random(1000);
-          
-          const colorMapping: { [key: string]: number[] } = {
-            'Sub Bass': [0, 80, 90],
-            'Bass': [30, 80, 90],
-            'Low Mids': [60, 80, 90],
-            'Midrange': [120, 70, 80],
-            'Upper Mids': [180, 70, 90],
-            'Presence': [240, 80, 90],
-            'Brilliance': [280, 80, 90],
-          };
-          const colorValues = colorMapping[channel.label] || [200, 50, 80];
-          this.color = p.color(colorValues[0], colorValues[1], colorValues[2]);
+          this.hueOffset = (index * (360 / total) * 0.7) % 360; 
+          this.color = p.color(this.hueOffset, 80, 90);
         }
         
         applyForce(force: any) {
@@ -242,25 +229,20 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
         }
 
         applyBehaviors(otherLenses: Lens[]) {
-            // 1. Attraction to its anchor position (spring force)
             let toTarget = p5.Vector.sub(this.targetPos, this.pos);
             toTarget.mult(0.01); 
             this.applyForce(toTarget);
 
-            // 2. Interaction with other lenses
             for (const other of otherLenses) {
                 if (other === this) continue;
-
                 let force = p5.Vector.sub(this.pos, other.pos);
                 let distance = force.mag();
 
-                // General Repulsion to avoid overlap
                 if (distance < 120) { 
                     force.setMag(p.map(distance, 0, 120, 0.6, 0));
                     this.applyForce(force);
                 }
 
-                // Correlated Novelty Attraction
                 const meritThreshold = 0.35;
                 if (this.channel.merit > meritThreshold && other.channel.merit > meritThreshold) {
                     let attractionForce = p5.Vector.sub(other.pos, this.pos);
@@ -273,14 +255,21 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
             }
         }
 
-        update(channel: ChannelState) {
+        update(channel: ChannelState, palette: any, consonance: number) {
           this.channel = channel;
-          // Physics based movement
+
+          const baseHue = p.hue(palette.primary);
+          const myHue = (baseHue + this.hueOffset) % 360;
+          const consonanceFactor = 0.5 + consonance * 0.5;
+          const mySaturation = p.map(this.channel.habituation, 0, 1, 80 * consonanceFactor, 20);
+          const myBrightness = p.map(this.channel.habituation, 0, 1, 95, 50);
+          this.color = p.color(myHue, mySaturation, myBrightness);
+
           this.vel.add(this.acc);
-          this.vel.mult(0.95); // Damping
-          this.vel.limit(3); // Max speed
+          this.vel.mult(0.95);
+          this.vel.limit(3);
           this.pos.add(this.vel);
-          this.acc.mult(0); // Reset acceleration
+          this.acc.mult(0);
         }
 
         attract(particle: Particle) {
@@ -308,7 +297,6 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
         }
         
         display() {
-           // Trigger supernova on channel merit (novelty)
            if (this.channel.merit > 0.6 && p.random() < 0.05) {
                 this.supernova();
            }
@@ -319,8 +307,8 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
            }
 
            const coreSize = 10 + this.channel.attention * 40;
-           const coreBrightness = p.map(this.channel.habituation, 0, 1, 90, 30);
-           const coreSaturation = p.map(this.channel.habituation, 0, 1, 80, 10);
+           const coreBrightness = p.map(this.channel.habituation, 0, 1, p.brightness(this.color), 30);
+           const coreSaturation = p.map(this.channel.habituation, 0, 1, p.saturation(this.color), 10);
            const coreColor = p.color(p.hue(this.color), coreSaturation, coreBrightness, 200);
            
            p.noStroke();
@@ -343,6 +331,15 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
         p.createCanvas(sketchRef.current!.offsetWidth, sketchRef.current!.offsetHeight);
         p.colorMode(p.HSB, 360, 100, 100, 255);
         p.strokeWeight(1.5);
+
+        // Initialize smoothed palette to a neutral default
+        smoothedPalette = {
+            bg: p.color(200, 50, 12, 255),
+            primary: p.color(200, 80, 95),
+            accent: p.color(350, 70, 95),
+            neutral: p.color(200, 10, 95),
+        };
+
         for (let i = 0; i < PARTICLE_COUNT; i++) {
           particles[i] = new Particle();
         }
@@ -353,7 +350,6 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
 
       p.windowResized = () => {
         p.resizeCanvas(sketchRef.current!.offsetWidth, sketchRef.current!.offsetHeight);
-        // Recalculate lens positions on resize
         const radius = p.min(p.width, p.height) * 0.35;
         lenses.forEach((lens, index) => {
             const angle = p.map(index, 0, lenses.length, 0, p.TWO_PI);
@@ -367,65 +363,83 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
       p.draw = () => {
         const { channels: currentChannels, harmonyState } = propsRef.current;
         
-        // Use harmony state to drive the background
+        // --- Adaptive Color Palette (Smoothed) ---
         const consonance = harmonyState?.consonance ?? 0;
-        const tension = harmonyState?.tension ?? 1;
         const pitch = harmonyState?.pitch ?? 0;
+        
+        const targetPitchHue = p.map(p.log(pitch), p.log(130), p.log(1046), 0, 360) % 360;
 
-        const baseHue = 95; // Greenish
-        const hue = (baseHue + (pitch % 60) - 30 + 360) % 360;
-        const saturation = 25 + consonance * 25;
-        const brightness = 10 + consonance * 10;
-        const alpha = 40 + tension * 20;
-
-        p.background(hue, saturation, brightness, alpha);
+        if (!isNaN(targetPitchHue)) {
+            const consonanceFactor = 0.6 + consonance * 0.4;
+            const targetPalette = {
+                bg: p.color(targetPitchHue, 50 * consonanceFactor, 12, 255),
+                primary: p.color(targetPitchHue, 80 * consonanceFactor, 95),
+                accent: p.color((targetPitchHue + 150) % 360, 70, 95),
+                neutral: p.color(targetPitchHue, 10, 95),
+            };
+            
+            // Smoothly interpolate towards the target palette to prevent flickering
+            const smoothing = 0.05;
+            smoothedPalette.bg = p.lerpColor(smoothedPalette.bg, targetPalette.bg, smoothing);
+            smoothedPalette.primary = p.lerpColor(smoothedPalette.primary, targetPalette.primary, smoothing);
+            smoothedPalette.accent = p.lerpColor(smoothedPalette.accent, targetPalette.accent, smoothing);
+            smoothedPalette.neutral = p.lerpColor(smoothedPalette.neutral, targetPalette.neutral, smoothing);
+        }
+        p.background(smoothedPalette.bg);
         
         if (lenses.length !== currentChannels.length) {
           lenses.length = 0;
           lenses.push(...currentChannels.map((ch, i) => new Lens(ch, i, currentChannels.length)));
         }
         
-        // --- Update and Display Supernova Particles ---
         for (let i = supernovaParticles.length - 1; i >= 0; i--) {
-            const sp = supernovaParticles[i];
-            sp.update();
-            sp.display();
-            if (sp.isDead()) {
-                supernovaParticles.splice(i, 1);
-            }
+            supernovaParticles[i].update();
+            supernovaParticles[i].display();
+            if (supernovaParticles[i].isDead()) supernovaParticles.splice(i, 1);
         }
         
-        // --- Update and Display Resolution Particles ---
         for (let i = resolutionParticles.length - 1; i >= 0; i--) {
-            const rp = resolutionParticles[i];
-            rp.update();
-            rp.display();
-            if (rp.isDead()) {
-                resolutionParticles.splice(i, 1);
-            }
+            resolutionParticles[i].update();
+            resolutionParticles[i].display();
+            if (resolutionParticles[i].isDead()) resolutionParticles.splice(i, 1);
         }
 
-        // --- Update and Display Base Particles ---
         for (const particle of particles) {
           particle.update();
-          particle.display(p.color(100, 5, 100), particle.baseAlpha);
+          particle.display(smoothedPalette.neutral, particle.baseAlpha);
         }
         
-        // --- LENS INTERACTION PASS ---
-        lenses.forEach(lens => {
-            lens.applyBehaviors(lenses);
-        });
-
-        // --- Update Lenses and have them affect particles ---
+        lenses.forEach(lens => lens.applyBehaviors(lenses));
         lenses.forEach((lens, i) => {
-          lens.update(currentChannels[i]);
+          lens.update(currentChannels[i], smoothedPalette, consonance);
           particles.forEach(particle => lens.attract(particle));
-          lens.display();
         });
 
-        // --- Update and Display Harmonic Core ---
-        harmonicCore.update();
-        harmonicCore.display();
+        // --- DRAW INTER-LENS CONNECTIONS from Interharmonic Analysis ---
+        const { interLensConsonance } = propsRef.current.harmonyState;
+        if (interLensConsonance && interLensConsonance.length === lenses.length) {
+            p.strokeWeight(0.75);
+            for (let i = 0; i < lenses.length; i++) {
+                for (let j = i + 1; j < lenses.length; j++) {
+                    const consonanceScore = interLensConsonance[i][j];
+                    if (consonanceScore > 0.15) { // Threshold to draw
+                        const opacity = p.map(consonanceScore, 0.15, 1.0, 0, 150);
+                        p.stroke(
+                            p.hue(smoothedPalette.neutral), 
+                            p.saturation(smoothedPalette.neutral) * 0.5, 
+                            p.brightness(smoothedPalette.neutral), 
+                            opacity
+                        );
+                        p.line(lenses[i].pos.x, lenses[i].pos.y, lenses[j].pos.x, lenses[j].pos.y);
+                    }
+                }
+            }
+        }
+
+        lenses.forEach(lens => lens.display());
+
+        harmonicCore.update(smoothedPalette);
+        harmonicCore.display(smoothedPalette);
       };
     };
 
