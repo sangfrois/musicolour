@@ -23,6 +23,8 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
     const sketch = (p: any) => {
       const particles: Particle[] = [];
       const supernovaParticles: SupernovaParticle[] = [];
+      const resolutionParticles: ResolutionParticle[] = [];
+      let harmonicCore: HarmonicCore;
       const lenses: Lens[] = [];
       const PARTICLE_COUNT = 1500;
 
@@ -98,6 +100,107 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
         }
       }
 
+      class ResolutionParticle {
+        pos: any;
+        vel: any;
+        lifespan: number;
+        color: any;
+
+        constructor(position: any, velocity: any, color: any) {
+            this.pos = position.copy();
+            this.vel = velocity.copy();
+            this.lifespan = 255;
+            this.color = color;
+        }
+
+        update() {
+            this.vel.mult(0.98); // Slows down
+            this.pos.add(this.vel);
+            this.lifespan -= 5;
+        }
+
+        isDead() {
+            return this.lifespan < 0;
+        }
+
+        display() {
+            p.stroke(p.hue(this.color), p.saturation(this.color), p.brightness(this.color), this.lifespan);
+            p.strokeWeight(2);
+            p.point(this.pos.x, this.pos.y);
+        }
+      }
+
+      class HarmonicCore {
+          pos: any;
+          noiseSeed: number;
+
+          constructor() {
+              this.pos = p.createVector(p.width / 2, p.height / 2);
+              this.noiseSeed = p.random(1000);
+          }
+
+          update() {
+              this.pos.set(p.width / 2, p.height / 2);
+              const { harmonyState } = propsRef.current;
+              
+              // Trigger resolution pulse for high resolution values
+              if (harmonyState.resolution > 0.5 && p.frameCount % 2 === 0) { // Throttle slightly
+                  this.pulse(harmonyState.resolution);
+              }
+          }
+          
+          pulse(strength: number) {
+              const particleCount = p.floor(p.map(strength, 0.5, 1, 20, 100));
+              const pulseColor = p.color(50, 100, 100); // Bright gold
+              for (let i = 0; i < particleCount; i++) {
+                  const angle = p.random(p.TWO_PI);
+                  const speed = p.random(3, 8) * (1 + strength);
+                  const vel = p5.Vector.fromAngle(angle, speed);
+                  resolutionParticles.push(new ResolutionParticle(this.pos, vel, pulseColor));
+              }
+          }
+
+          display() {
+              const { harmonyState, channels } = propsRef.current;
+              const tension = harmonyState?.tension ?? 0.5;
+
+              // Calculate overall energy for size from active channels
+              const totalSignal = channels.reduce((sum, ch) => sum + ch.currentSignal, 0);
+              const avgSignal = channels.length > 0 ? totalSignal / channels.length : 0;
+              const baseSize = 50 + avgSignal * 250;
+
+              // Interpolate color based on tension
+              const lowTensionColor = p.color(45, 80, 100); // Gold
+              const highTensionColor = p.color(0, 90, 90); // Red
+              const coreColor = p.lerpColor(lowTensionColor, highTensionColor, tension);
+
+              p.push();
+              p.translate(this.pos.x, this.pos.y);
+              p.noStroke();
+
+              // Agitated shape for high tension
+              const instability = tension * 20;
+              
+              // Render multiple layers for a glow effect
+              for (let i = 5; i > 0; i--) {
+                  const size = baseSize + i * 20;
+                  const alpha = p.map(i, 5, 1, 10, 50);
+                  p.fill(p.hue(coreColor), p.saturation(coreColor), p.brightness(coreColor), alpha);
+                  
+                  p.beginShape();
+                  for (let angle = 0; angle < p.TWO_PI; angle += 0.1) {
+                      const offset = p.map(p.noise(this.noiseSeed + p.cos(angle) + p.frameCount * 0.01, this.noiseSeed + p.sin(angle) + p.frameCount * 0.01), 0, 1, -instability, instability);
+                      const r = size / 2 + offset;
+                      const x = r * p.cos(angle);
+                      const y = r * p.sin(angle);
+                      p.vertex(x, y);
+                  }
+                  p.endShape(p.CLOSE);
+              }
+              
+              p.pop();
+          }
+      }
 
       class Lens {
         channel: ChannelState;
@@ -167,9 +270,8 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
         }
         
         display() {
-           const { harmonyState } = propsRef.current;
-           // Trigger supernova on channel merit OR harmonic resolution
-           if ((this.channel.merit > 0.6 && p.random() < 0.05) || (harmonyState?.resolution > 0.6 && p.random() < 0.05)) {
+           // Trigger supernova on channel merit (novelty)
+           if (this.channel.merit > 0.6 && p.random() < 0.05) {
                 this.supernova();
            }
           
@@ -208,10 +310,20 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
         }
         const { channels: currentChannels } = propsRef.current;
         lenses.push(...currentChannels.map((ch, i) => new Lens(ch, i, currentChannels.length)));
+        harmonicCore = new HarmonicCore();
       };
 
       p.windowResized = () => {
         p.resizeCanvas(sketchRef.current!.offsetWidth, sketchRef.current!.offsetHeight);
+        // Recalculate lens positions on resize
+        const radius = p.min(p.width, p.height) * 0.35;
+        lenses.forEach((lens, index) => {
+            const angle = p.map(index, 0, lenses.length, 0, p.TWO_PI);
+            lens.targetPos.set(
+                p.width / 2 + radius * p.cos(angle),
+                p.height / 2 + radius * p.sin(angle)
+            );
+        });
       };
 
       p.draw = () => {
@@ -244,6 +356,16 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
                 supernovaParticles.splice(i, 1);
             }
         }
+        
+        // --- Update and Display Resolution Particles ---
+        for (let i = resolutionParticles.length - 1; i >= 0; i--) {
+            const rp = resolutionParticles[i];
+            rp.update();
+            rp.display();
+            if (rp.isDead()) {
+                resolutionParticles.splice(i, 1);
+            }
+        }
 
         // --- Update and Display Base Particles ---
         for (const particle of particles) {
@@ -257,6 +379,10 @@ const P5Canvas: React.FC<P5CanvasProps> = ({ channels, harmonyState }) => {
           particles.forEach(particle => lens.attract(particle));
           lens.display();
         });
+
+        // --- Update and Display Harmonic Core ---
+        harmonicCore.update();
+        harmonicCore.display();
       };
     };
 
